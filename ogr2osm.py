@@ -52,6 +52,8 @@ from osgeo import ogr
 from osgeo import osr
 from geom import *
 
+from datetime import datetime
+
 
 '''
 
@@ -83,169 +85,195 @@ except ImportError:
                 l.error("Failed to import ElementTree from any known place")
                 raise
 
-
-# Setup program usage
-usage = "usage: %prog SRCFILE"
-parser = optparse.OptionParser(usage=usage)
-parser.add_option("-t", "--translation", dest="translationMethod",
-                  metavar="TRANSLATION",
-                  help="Select the attribute-tags translation method. See " +
-                  "the translations/ directory for valid values.")
-parser.add_option("-o", "--output", dest="outputFile", metavar="OUTPUT",
-                  help="Set destination .osm file name and location.")
-parser.add_option("-e", "--epsg", dest="sourceEPSG", metavar="EPSG_CODE",
-                  help="EPSG code of source file. Do not include the " +
-                       "'EPSG:' prefix. If specified, overrides projection " +
-                       "from source metadata if it exists.")
-parser.add_option("-p", "--proj4", dest="sourcePROJ4", metavar="PROJ4_STRING",
-                  help="PROJ.4 string. If specified, overrides projection " +
-                       "from source metadata if it exists.")
-parser.add_option("-v", "--verbose", dest="verbose", action="store_true")
-parser.add_option("-d", "--debug-tags", dest="debugTags", action="store_true",
-                  help="Output the tags for every feature parsed.")
-parser.add_option("-f", "--force", dest="forceOverwrite", action="store_true",
-                  help="Force overwrite of output file.")
-
-parser.add_option("--encoding", dest="encoding",
-                  help="Encoding of the source file. If specified, overrides " +
-                  "the default of utf-8", default="utf-8")
-
-parser.add_option("--rounding-digits",  dest="roundingDigits", type=int,
-                  help="Number of decimal places for rounding", default=12)
-
-parser.add_option("--no-memory-copy", dest="noMemoryCopy", action="store_true",
-                    help="Do not make an in-memory working copy")
-                    
-parser.add_option("--no-upload-false", dest="noUploadFalse", action="store_true",
-                    help="Omit upload=false from the completed file to surpress JOSM warnings when uploading.")
-
-parser.add_option("--id", dest="id", type=int, default=0,
-                    help="ID to start counting from for the output file. Defaults to 0.")
-
-parser.add_option("--idfile", dest="idfile", type=str, default=None,
-                    help="Read ID to start counting from from a file.")
-
-parser.add_option("--saveid", dest="saveid", type=str, default=None,
-                    help="Save last ID after execution to a file.")
-
-# Positive IDs can cause big problems if used inappropriately so hide the help for this
-parser.add_option("--positive-id", dest="positiveID", action="store_true",
-                    help=optparse.SUPPRESS_HELP)
-
-# Add version attributes. Again, this can cause big problems so surpress the help
-parser.add_option("--add-version", dest="addVersion", action="store_true",
-                    help=optparse.SUPPRESS_HELP)
-
-# Add timestamp attributes. Again, this can cause big problems so surpress the help
-parser.add_option("--add-timestamp", dest="addTimestamp", action="store_true",
-                    help=optparse.SUPPRESS_HELP)
-
-parser.set_defaults(sourceEPSG=None, sourcePROJ4=None, verbose=False,
-                    debugTags=False,
-                    translationMethod=None, outputFile=None,
-                    forceOverwrite=False, noUploadFalse=False)
-
-# Parse and process arguments
-(options, args) = parser.parse_args()
-Geometry.roundingDigits = options.roundingDigits
-
-try:
-    if options.sourceEPSG:
-        options.sourceEPSG = int(options.sourceEPSG)
-except:
-    parser.error("EPSG code must be numeric (e.g. '4326', not 'epsg:4326')")
-
-if len(args) < 1:
-    parser.print_help()
-    parser.error("you must specify a source filename")
-elif len(args) > 1:
-    parser.error("you have specified too many arguments, " +
-                 "only supply the source filename")
-                 
-if options.addTimestamp:
-    from datetime import datetime
+def main():
     
-# Input and output file
-# if no output file given, use the basename of the source but with .osm
-sourceFile = args[0]
-if options.outputFile is not None:
-    options.outputFile = os.path.realpath(options.outputFile)
-else:
-    (base, ext) = os.path.splitext(os.path.basename(sourceFile))
-    options.outputFile = os.path.join(os.getcwd(), base + ".osm")
-if not options.forceOverwrite and os.path.exists(options.outputFile):
-    parser.error("ERROR: output file '%s' exists" % (options.outputFile))
-l.info("Preparing to convert file '%s' to '%s'." % (sourceFile, options.outputFile))
+    global options
+    (parser, options, args) = setup_option_parser()
+    process_options_and_args(options, args)
+    
+    data = getFileData(options.sourceFile)
+    parseData(data)
+    translations.preOutputTransform(Geometry.geometries, Feature.features)
+    output()
+    if options.saveid:
+        with open(options.saveid, 'w') as ff:
+            ff.write(str(Geometry.elementIdCounter))
+        l.info("Wrote elementIdCounter '%d' to file '%s'"
+            % (Geometry.elementIdCounter, options.saveid))
+    
 
-# Projection
-if not options.sourcePROJ4 and not options.sourceEPSG:
-    l.info("Will try to detect projection from source metadata, or fall back to EPSG:4326")
-elif options.sourcePROJ4:
-    l.info("Will use the PROJ.4 string: " + options.sourcePROJ4)
-elif options.sourceEPSG:
-    l.info("Will use EPSG:" + str(options.sourceEPSG))
 
-# Stuff needed for locating translation methods
-if options.translationMethod:
-    # add dirs to path if necessary
-    (root, ext) = os.path.splitext(options.translationMethod)
-    if os.path.exists(options.translationMethod) and ext == '.py':
-        # user supplied translation file directly
-        sys.path.insert(0, os.path.dirname(root))
-    else:
-        # first check translations in the subdir translations of cwd
-        sys.path.insert(0, os.path.join(os.getcwd(), "translations"))
-        # then check subdir of script dir
-        sys.path.insert(1, os.path.join(os.path.dirname(__file__), "translations"))
-        # (the cwd will also be checked implicityly)
+def setup_option_parser():
+    
+    # FIXME
+    global parser
+    
+    usage = "usage: %prog SRCFILE"
+    parser = optparse.OptionParser(usage=usage)
+    parser.add_option("-t", "--translation", dest="translationMethod",
+                      metavar="TRANSLATION",
+                      help="Select the attribute-tags translation method. See " +
+                      "the translations/ directory for valid values.")
+    parser.add_option("-o", "--output", dest="outputFile", metavar="OUTPUT",
+                      help="Set destination .osm file name and location.")
+    parser.add_option("-e", "--epsg", dest="sourceEPSG", metavar="EPSG_CODE",
+                      help="EPSG code of source file. Do not include the " +
+                           "'EPSG:' prefix. If specified, overrides projection " +
+                           "from source metadata if it exists.")
+    parser.add_option("-p", "--proj4", dest="sourcePROJ4", metavar="PROJ4_STRING",
+                      help="PROJ.4 string. If specified, overrides projection " +
+                           "from source metadata if it exists.")
+    parser.add_option("-v", "--verbose", dest="verbose", action="store_true")
+    parser.add_option("-d", "--debug-tags", dest="debugTags", action="store_true",
+                      help="Output the tags for every feature parsed.")
+    parser.add_option("-f", "--force", dest="forceOverwrite", action="store_true",
+                      help="Force overwrite of output file.")
 
-    # strip .py if present, as import wants just the module name
-    if ext == '.py':
-        options.translationMethod = os.path.basename(root)
+    parser.add_option("--encoding", dest="encoding",
+                      help="Encoding of the source file. If specified, overrides " +
+                      "the default of utf-8", default="utf-8")
+
+    parser.add_option("--rounding-digits",  dest="roundingDigits", type=int,
+                      help="Number of decimal places for rounding", default=12)
+
+    parser.add_option("--no-memory-copy", dest="noMemoryCopy", action="store_true",
+                        help="Do not make an in-memory working copy")
+                        
+    parser.add_option("--no-upload-false", dest="noUploadFalse", action="store_true",
+                        help="Omit upload=false from the completed file to surpress JOSM warnings when uploading.")
+
+    parser.add_option("--id", dest="id", type=int, default=0,
+                        help="ID to start counting from for the output file. Defaults to 0.")
+
+    parser.add_option("--idfile", dest="idfile", type=str, default=None,
+                        help="Read ID to start counting from from a file.")
+
+    parser.add_option("--saveid", dest="saveid", type=str, default=None,
+                        help="Save last ID after execution to a file.")
+
+    # Positive IDs can cause big problems if used inappropriately so hide the help for this
+    parser.add_option("--positive-id", dest="positiveID", action="store_true",
+                        help=optparse.SUPPRESS_HELP)
+
+    # Add version attributes. Again, this can cause big problems so surpress the help
+    parser.add_option("--add-version", dest="addVersion", action="store_true",
+                        help=optparse.SUPPRESS_HELP)
+
+    # Add timestamp attributes. Again, this can cause big problems so surpress the help
+    parser.add_option("--add-timestamp", dest="addTimestamp", action="store_true",
+                        help=optparse.SUPPRESS_HELP)
+
+    parser.set_defaults(sourceEPSG=None, sourcePROJ4=None, verbose=False,
+                        debugTags=False,
+                        translationMethod=None, outputFile=None,
+                        forceOverwrite=False, noUploadFalse=False)
+
+    # Parse and process arguments
+    (options, args) = parser.parse_args()
+    return (parser, options, args)
+    
+    
+def process_options_and_args(options, args):
+    
+    global translations
+    Geometry.roundingDigits = options.roundingDigits
 
     try:
-        translations = __import__(options.translationMethod, fromlist = [''])
-    except ImportError as e:
-        parser.error("Could not load translation method '%s'. Translation "
-               "script must be in your current directory, or in the "
-               "translations/ subdirectory of your current or ogr2osm.py "
-               "directory. The following directories have been considered: %s"
-               % (options.translationMethod, str(sys.path)))
-    except SyntaxError as e:
-        parser.error("Syntax error in '%s'. Translation script is malformed:\n%s"
-               % (options.translationMethod, e))
+        if options.sourceEPSG:
+            options.sourceEPSG = int(options.sourceEPSG)
+    except:
+        parser.error("EPSG code must be numeric (e.g. '4326', not 'epsg:4326')")
 
-    l.info("Successfully loaded '%s' translation method ('%s')."
-           % (options.translationMethod, os.path.realpath(translations.__file__)))
-else:
-    import types
-    translations = types.ModuleType("translationmodule")
-    l.info("Using default translations")
-
-default_translations = [
-    ('filterLayer', lambda layer: layer),
-    ('filterFeature', lambda feature, fieldNames, reproject: feature),
-    ('filterTags', lambda tags: tags),
-    ('filterFeaturePost', lambda feature, fieldNames, reproject: feature),
-    ('preOutputTransform', lambda geometries, features: None),
-    ]
-
-for (k, v) in default_translations:
-    if hasattr(translations, k) and getattr(translations, k):
-        l.debug("Using user " + k)
+    if len(args) < 1:
+        parser.print_help()
+        parser.error("you must specify a source filename")
+    elif len(args) > 1:
+        parser.error("you have specified too many arguments, " +
+                     "only supply the source filename")
+                     
+    # Input and output file
+    # if no output file given, use the basename of the source but with .osm
+    options.sourceFile = args[0]
+    if options.outputFile is not None:
+        options.outputFile = os.path.realpath(options.outputFile)
     else:
-        l.debug("Using default " + k)
-        setattr(translations, k, v)
+        (base, ext) = os.path.splitext(os.path.basename(options.sourceFile))
+        options.outputFile = os.path.join(os.getcwd(), base + ".osm")
+    if not options.forceOverwrite and os.path.exists(options.outputFile):
+        parser.error("ERROR: output file '%s' exists" % (options.outputFile))
+    l.info("Preparing to convert file '%s' to '%s'." % (options.sourceFile, options.outputFile))
 
-Geometry.elementIdCounter = options.id
-if options.idfile:
-    with open(options.idfile, 'r') as ff:
-        Geometry.elementIdCounter = int(ff.readline(20))
-    l.info("Starting counter value '%d' read from file '%s'." \
-        % (Geometry.elementIdCounter, options.idfile))
+    # Projection
+    if not options.sourcePROJ4 and not options.sourceEPSG:
+        l.info("Will try to detect projection from source metadata, or fall back to EPSG:4326")
+    elif options.sourcePROJ4:
+        l.info("Will use the PROJ.4 string: " + options.sourcePROJ4)
+    elif options.sourceEPSG:
+        l.info("Will use EPSG:" + str(options.sourceEPSG))
 
-if options.positiveID:
-    Geometry.elementIdCounterIncr = 1 # default is -1
+    # Stuff needed for locating translation methods
+    if options.translationMethod:
+        # add dirs to path if necessary
+        (root, ext) = os.path.splitext(options.translationMethod)
+        if os.path.exists(options.translationMethod) and ext == '.py':
+            # user supplied translation file directly
+            sys.path.insert(0, os.path.dirname(root))
+        else:
+            # first check translations in the subdir translations of cwd
+            sys.path.insert(0, os.path.join(os.getcwd(), "translations"))
+            # then check subdir of script dir
+            sys.path.insert(1, os.path.join(os.path.dirname(__file__), "translations"))
+            # (the cwd will also be checked implicityly)
+
+        # strip .py if present, as import wants just the module name
+        if ext == '.py':
+            options.translationMethod = os.path.basename(root)
+
+        try:
+            translations = __import__(options.translationMethod, fromlist = [''])
+        except ImportError as e:
+            parser.error("Could not load translation method '%s'. Translation "
+                   "script must be in your current directory, or in the "
+                   "translations/ subdirectory of your current or ogr2osm.py "
+                   "directory. The following directories have been considered: %s"
+                   % (options.translationMethod, str(sys.path)))
+        except SyntaxError as e:
+            parser.error("Syntax error in '%s'. Translation script is malformed:\n%s"
+                   % (options.translationMethod, e))
+
+        l.info("Successfully loaded '%s' translation method ('%s')."
+               % (options.translationMethod, os.path.realpath(translations.__file__)))
+    else:
+        import types
+        translations = types.ModuleType("translationmodule")
+        l.info("Using default translations")
+
+    default_translations = [
+        ('filterLayer', lambda layer: layer),
+        ('filterFeature', lambda feature, fieldNames, reproject: feature),
+        ('filterTags', lambda tags: tags),
+        ('filterFeaturePost', lambda feature, fieldNames, reproject: feature),
+        ('preOutputTransform', lambda geometries, features: None),
+        ]
+
+    for (k, v) in default_translations:
+        if hasattr(translations, k) and getattr(translations, k):
+            l.debug("Using user " + k)
+        else:
+            l.debug("Using default " + k)
+            setattr(translations, k, v)
+
+    Geometry.elementIdCounter = options.id
+
+    if options.idfile:
+        with open(options.idfile, 'r') as ff:
+            Geometry.elementIdCounter = int(ff.readline(20))
+        l.info("Starting counter value '%d' read from file '%s'." \
+            % (Geometry.elementIdCounter, options.idfile))
+
+    if options.positiveID:
+        Geometry.elementIdCounterIncr = 1 # default is -1
+
 
 def getFileData(filename):
     ogr_accessmethods = [ "/vsicurl/", "/vsicurl_streaming/", "/vsisubfile/",
@@ -284,13 +312,14 @@ def getFileData(filename):
         memoryDataSource = ogr.GetDriverByName('Memory').CopyDataSource(fileDataSource,'memoryCopy')
         return memoryDataSource
 
+
 def parseData(dataSource):
     l.debug("Parsing data")
-    global translations
     for i in range(dataSource.GetLayerCount()):
         layer = dataSource.GetLayer(i)
         layer.ResetReading()
         parseLayer(translations.filterLayer(layer))
+
 
 def getTransform(layer):
     global options
@@ -325,6 +354,7 @@ def getTransform(layer):
 
     return reproject
 
+
 def getLayerFields(layer):
     featureDefinition = layer.GetLayerDefn()
     fieldNames = []
@@ -332,6 +362,7 @@ def getLayerFields(layer):
     for j in range(fieldCount):
         fieldNames.append(featureDefinition.GetFieldDefn(j).GetNameRef())
     return fieldNames
+
 
 def getFeatureTags(ogrfeature, fieldNames):
     '''
@@ -553,13 +584,5 @@ def output():
         f.write('</osm>')
 
 
-# Main flow
-data = getFileData(sourceFile)
-parseData(data)
-translations.preOutputTransform(Geometry.geometries, Feature.features)
-output()
-if options.saveid:
-    with open(options.saveid, 'w') as ff:
-        ff.write(str(Geometry.elementIdCounter))
-    l.info("Wrote elementIdCounter '%d' to file '%s'"
-        % (Geometry.elementIdCounter, options.saveid))
+if __name__ == '__main__':
+    main()
