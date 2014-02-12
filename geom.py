@@ -4,63 +4,116 @@
 # <penorman@mac.com>
 # Released under the MIT license: http://opensource.org/licenses/mit-license.php
 
-# Classes
-class Geometry(object):
-    elementIdCounter = 0
-    elementIdCounterIncr = -1
-    geometries = []
+class ItemWithParents(object):
+    
     def __init__(self):
-        self.id = getNewID()
         self.parents = set()
-        Geometry.geometries.append(self)
-    def replacejwithi(self, i, j):
-        pass
+        
+        
     def addparent(self, parent):
         self.parents.add(parent)
+
+
     def removeparent(self, parent, shoulddestroy=True):
         self.parents.discard(parent)
         if shoulddestroy and len(self.parents) == 0:
-            Geometry.geometries.remove(self)
+            self.remove_object(self)
 
-# Helper function to get a new ID
-def getNewID():
-    Geometry.elementIdCounter += Geometry.elementIdCounterIncr
-    return Geometry.elementIdCounter
 
-class Point(Geometry):
-    def __init__(self, x, y):
-        Geometry.__init__(self)
-        self.x = x
-        self.y = y
     def replacejwithi(self, i, j):
+        j.removeparent(self)
+        i.addparent(self)
+        
+    @classmethod
+    def remove_object(cls):
         pass
 
-class Way(Geometry):
+    
+# Classes
+class Geometry(ItemWithParents):
+    elementIdCounterIncr = -1
+    geometries = []
+
+
+    @classmethod
+    def getNewID(cls):
+        cls.elementIdCounter += cls.elementIdCounterIncr
+        return cls.elementIdCounter
+        
+    @classmethod
+    def append_to_geometries(cls, geom):
+        cls.geometries.append(geom)
+
+
+    @classmethod
+    def remove_object(cls):
+        cls.geometries.remove(geom)
+
+
     def __init__(self):
-        Geometry.__init__(self)
+        super(Geometry, self).__init__()
+        self.id = self.getNewID()
+        Geometry.append_to_geometries(self)
+
+
+class Point(Geometry):
+
+    elementIdCounter = 0
+    
+    def __init__(self, x, y):
+        super(Point, self).__init__()
+        self.x = x
+        self.y = y
+        
+        
+
+class Way(Geometry):
+
+    elementIdCounter = 0
+
+    def __init__(self):
+        super(Way, self).__init__()
         self.points = []
+        
+        
     def replacejwithi(self, i, j):
         self.points = [i if x == j else x for x in self.points]
-        j.removeparent(self)
-        i.addparent(self)
+        super(Way, self).replacejwithi(i, j)
+
 
 class Relation(Geometry):
+
+    elementIdCounter = 0
+
     def __init__(self):
-        Geometry.__init__(self)
+        super(Relation, self).__init__()
         self.members = []
+        
+        
     def replacejwithi(self, i, j):
         self.members = [(i, x[1]) if x[0] == j else x for x in self.members]
-        j.removeparent(self)
-        i.addparent(self)
+        super(Relation, self).replacejwithi(i, j)        
 
-class Feature(object):
+
+class Feature(ItemWithParents):
     features = []
+
     def __init__(self):
+        super(Feature, self).__init__()
         self.geometry = None
         self.tags = {}
         Feature.features.append(self)
+
+
+    def set_geometry(self, geometry):
+        self.geometry = geometry
+        if geometry:
+            geometry.addparent(self)
+
+
+    # ?????
     def replacejwithi(self, i, j):
         if self.geometry == j:
             self.geometry = i
-        j.removeparent(self)
-        i.addparent(self)
+        super(Feature, self).replacejwithi(i, j)
+

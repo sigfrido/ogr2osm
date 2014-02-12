@@ -345,6 +345,7 @@ def getFeatureTags(ogrfeature, fieldNames):
         tags[fieldNames[i].decode(options.encoding)] = ogrfeature.GetFieldAsString(i).decode(options.encoding).strip()
     return translations.filterTags(tags)
 
+
 def parseLayer(layer):
     if layer is None:
         return
@@ -354,6 +355,7 @@ def parseLayer(layer):
     for j in range(layer.GetFeatureCount()):
         ogrfeature = layer.GetNextFeature()
         parseFeature(translations.filterFeature(ogrfeature, fieldNames, reproject), fieldNames, reproject)
+
 
 def parseFeature(ogrfeature, fieldNames, reproject):
     if ogrfeature is None:
@@ -371,8 +373,7 @@ def parseFeature(ogrfeature, fieldNames, reproject):
 
         feature = Feature()
         feature.tags = getFeatureTags(ogrfeature, fieldNames)
-        feature.geometry = geometry
-        geometry.addparent(feature)
+        feature.set_geometry(geometry)
         
         translations.filterFeaturePost(feature, ogrfeature, ogrgeometry)
     
