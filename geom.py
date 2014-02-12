@@ -7,8 +7,7 @@
 # Classes
 class Geometry(object):
     elementIdCounterIncr = -1
-    significantDigits = 9
-    roundingDigits = 7
+    roundingDigits = 9
     geometries = []
 
 
@@ -24,14 +23,8 @@ class Geometry(object):
 
 
     @classmethod
-    def remove_from_geometries(cls, geom):
-        cls.geometries.remove(geom)
-
-
-    @classmethod
     def round_coord(cls, coord):
-        return coord
-        return int(round(coord * 10**(cls.significantDigits - cls.roundingDigits)))
+        return round(coord, cls.roundingDigits)
         
 
 

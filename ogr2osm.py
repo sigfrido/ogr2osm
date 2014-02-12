@@ -110,11 +110,8 @@ parser.add_option("--encoding", dest="encoding",
                   help="Encoding of the source file. If specified, overrides " +
                   "the default of utf-8", default="utf-8")
 
-parser.add_option("--significant-digits",  dest="significantDigits", type=int,
-                  help="Number of decimal places for coordinates", default=9)
-                  
 parser.add_option("--rounding-digits",  dest="roundingDigits", type=int,
-                  help="Number of decimal places for rounding", default=7)
+                  help="Number of decimal places for rounding", default=12)
 
 parser.add_option("--no-memory-copy", dest="noMemoryCopy", action="store_true",
                     help="Do not make an in-memory working copy")
@@ -150,7 +147,6 @@ parser.set_defaults(sourceEPSG=None, sourcePROJ4=None, verbose=False,
 
 # Parse and process arguments
 (options, args) = parser.parse_args()
-Geometry.significantDigits = options.significantDigits
 Geometry.roundingDigits = options.roundingDigits
 
 try:
@@ -413,21 +409,17 @@ def parseGeometry(ogrgeometries):
     
             
 def parsePoint(ogrgeometry):
-    #~ x = int(round(ogrgeometry.GetX() * 10**options.significantDigits))
-    #~ y = int(round(ogrgeometry.GetY() * 10**options.significantDigits))
-    return Node.get_node(ogrgeometry.GetX(), ogrgeometry.GetY())
+    node = Node.get_node(ogrgeometry.GetX(), ogrgeometry.GetY())
+    return node
     
 
 def parseLineString(ogrgeometry):
-    geometry = Way()
-    # LineString.GetPoint() returns a tuple, so we can't call parsePoint on it
-    # and instead have to create the point ourself
-    global linestring_points
+    way = Way()
     for i in range(ogrgeometry.GetPointCount()):
         (x, y, unused) = ogrgeometry.GetPoint(i)
         node = Node.get_node(x, y)
-        geometry.append_node(node)
-    return geometry
+        way.append_node(node)
+    return way
 
 
 def parsePolygon(ogrgeometry):
