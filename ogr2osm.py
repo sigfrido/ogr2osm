@@ -150,6 +150,8 @@ parser.set_defaults(sourceEPSG=None, sourcePROJ4=None, verbose=False,
 
 # Parse and process arguments
 (options, args) = parser.parse_args()
+Geometry.significantDigits = options.significantDigits
+Geometry.roundingDigits = options.roundingDigits
 
 try:
     if options.sourceEPSG:
@@ -408,14 +410,14 @@ def parseGeometry(ogrgeometries):
             returngeometries.append(None)
             
     return returngeometries
+    
             
 def parsePoint(ogrgeometry):
-    x = int(round(ogrgeometry.GetX() * 10**options.significantDigits))
-    y = int(round(ogrgeometry.GetY() * 10**options.significantDigits))
-    geometry = Point(x, y)
-    return geometry
+    #~ x = int(round(ogrgeometry.GetX() * 10**options.significantDigits))
+    #~ y = int(round(ogrgeometry.GetY() * 10**options.significantDigits))
+    return Node.get_node(ogrgeometry.GetX(), ogrgeometry.GetY())
+    
 
-linestring_points = {}
 def parseLineString(ogrgeometry):
     geometry = Way()
     # LineString.GetPoint() returns a tuple, so we can't call parsePoint on it
@@ -423,16 +425,10 @@ def parseLineString(ogrgeometry):
     global linestring_points
     for i in range(ogrgeometry.GetPointCount()):
         (x, y, unused) = ogrgeometry.GetPoint(i)
-        (rx, ry) = (int(round(x*10**options.roundingDigits)), int(round(y*10**options.roundingDigits)))
-        (x, y) = (int(round(x*10**options.significantDigits)), int(round(y*10**options.significantDigits)))
-        if (rx,ry) in linestring_points:
-            mypoint = linestring_points[(rx,ry)]
-        else:
-            mypoint = Point(x, y)
-            linestring_points[(rx,ry)] = mypoint
-        geometry.points.append(mypoint)
-        mypoint.addparent(geometry)
+        node = Node.get_node(x, y)
+        geometry.append_node(node)
     return geometry
+
 
 def parsePolygon(ogrgeometry):
     # Special case polygons with only one ring. This does not (or at least
@@ -442,19 +438,18 @@ def parsePolygon(ogrgeometry):
     elif ogrgeometry.GetGeometryCount() == 1:
         return parseLineString(ogrgeometry.GetGeometryRef(0))
     else:
-        geometry = Relation()
+        rel = Relation()
         try:
             exterior = parseLineString(ogrgeometry.GetGeometryRef(0))
-            exterior.addparent(geometry)
         except:
             l.warning("Polygon with no exterior ring?")
             return None
-        geometry.members.append((exterior, "outer"))
+        rel.append_member((exterior, "outer"))
         for i in range(1, ogrgeometry.GetGeometryCount()):
             interior = parseLineString(ogrgeometry.GetGeometryRef(i))
-            interior.addparent(geometry)
-            geometry.members.append((interior, "inner"))
-        return geometry
+            rel.append_member((interior, "inner"))
+        return rel
+
 
 def parseCollection(ogrgeometry):
     # OGR MultiPolygon maps easily to osm multipolygon, so special case it
@@ -466,12 +461,10 @@ def parseCollection(ogrgeometry):
             geometry = Relation()
             for polygon in range(ogrgeometry.GetGeometryCount()):
                 exterior = parseLineString(ogrgeometry.GetGeometryRef(polygon).GetGeometryRef(0))
-                exterior.addparent(geometry)
-                geometry.members.append((exterior, "outer"))
+                geometry.append_member((exterior, "outer"))
                 for i in range(1, ogrgeometry.GetGeometryRef(polygon).GetGeometryCount()):
                     interior = parseLineString(ogrgeometry.GetGeometryRef(polygon).GetGeometryRef(i))
-                    interior.addparent(geometry)
-                    geometry.members.append((interior, "inner"))
+                    geometry.append_member((interior, "inner"))
             return [geometry]
         else:
            return [parsePolygon(ogrgeometry.GetGeometryRef(0))]
@@ -485,55 +478,15 @@ def parseCollection(ogrgeometry):
         geometry = Relation()
         for i in range(ogrgeometry.GetGeometryCount()):
             member = parseGeometry(ogrgeometry.GetGeometryRef(i))
-            member.addparent(geometry)
-            geometry.members.append((member, "member"))
+            geometry.append_member((member, "member"))
         return [geometry]
 
-def mergePoints():
-    l.debug("Merging points")
-    points = [geom for geom in Geometry.geometries if type(geom) == Point]
 
-    # Make list of Points at each location
-    l.debug("Making list")
-    pointcoords = {}
-    for i in points:
-        rx = int(round(i.x * 10**(options.significantDigits-options.roundingDigits)))
-        ry = int(round(i.y * 10**(options.significantDigits-options.roundingDigits)))
-        if (rx, ry) in pointcoords:
-            pointcoords[(rx, ry)].append(i)
-        else:
-            pointcoords[(rx, ry)] = [i]
-
-    # Use list to get rid of extras
-    l.debug("Checking list")
-    for (location, pointsatloc) in pointcoords.items():
-        if len(pointsatloc) > 1:
-            for point in pointsatloc[1:]:
-                for parent in set(point.parents):
-                    parent.replacejwithi(pointsatloc[0], point)
-
-def mergeWayPoints():
-    l.debug("Merging duplicate points in ways")
-    ways = [geom for geom in Geometry.geometries if type(geom) == Way]
-
-    # Remove duplicate points from ways,
-    # a duplicate has the same id as its predecessor
-    for way in ways:
-        previous = options.id
-        merged_points = []
-
-        for node in way.points:
-            if previous == options.id or previous != node.id:
-                merged_points.append(node)
-                previous = node.id
-           
-        if len(merged_points) > 0:
-            way.points = merged_points
 
 def output():
     l.debug("Outputting XML")
     # First, set up a few data structures for optimization purposes
-    nodes = [geom for geom in Geometry.geometries if type(geom) == Point]
+    nodes = [geom for geom in Geometry.geometries if type(geom) == Node]
     ways = [geom for geom in Geometry.geometries if type(geom) == Way]
     relations = [geom for geom in Geometry.geometries if type(geom) == Relation]
     featuresmap = {feature.geometry : feature for feature in Feature.features}
@@ -555,7 +508,7 @@ def output():
             attributes.update({'timestamp':datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')})
             
         for node in nodes:
-            xmlattrs = {'visible':'true','id':str(node.id), 'lat':str(node.y*10**-options.significantDigits), 'lon':str(node.x*10**-options.significantDigits)}
+            xmlattrs = {'visible':'true','id':str(node.id), 'lat':str(node.lat), 'lon':str(node.lon)}
             xmlattrs.update(attributes)
             
             xmlobject = etree.Element('node', xmlattrs)
@@ -574,7 +527,7 @@ def output():
             
             xmlobject = etree.Element('way', xmlattrs)
             
-            for node in way.points:
+            for node in way.nodes:
                 nd = etree.Element('nd',{'ref':str(node.id)})
                 xmlobject.append(nd)
             if way in featuresmap:
@@ -611,8 +564,6 @@ def output():
 # Main flow
 data = getFileData(sourceFile)
 parseData(data)
-mergePoints()
-mergeWayPoints()
 translations.preOutputTransform(Geometry.geometries, Feature.features)
 output()
 if options.saveid:
