@@ -34,10 +34,6 @@ class Geometry(object):
         
         
 
-    def set_ref_geom(self, geometry):
-        self.ref_geom = geometry
-        
-        
         
 class Node(Geometry):
 
